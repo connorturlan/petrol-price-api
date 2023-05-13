@@ -8,14 +8,15 @@ Description: >
 # More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
 Globals:
   Function:
-    Timeout: 3
+    Timeout: 600
     MemorySize: 128
+
 
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
-      CodeUri: hello_world/
+      CodeUri: src/
       Handler: app.lambda_handler
       Runtime: python3.10
       Architectures:
@@ -26,6 +27,24 @@ Resources:
           Properties:
             Path: /hello
             Method: get
+  UpdatePricesDatabase:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_updateDatabase
+      Runtime: python3.10
+      Architectures:
+        - x86_64
+      Events:
+        HelloWorld:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /update
+            Method: get
+      Policies:
+        - DynamoDBCrudPolicy: {
+          TableName: current_fuel_prices
+        }
 
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
@@ -40,3 +59,12 @@ Outputs:
   HelloWorldFunctionIamRole:
     Description: "Implicit IAM Role created for Hello World function"
     Value: !GetAtt HelloWorldFunctionRole.Arn
+  UpdatePricesAPI:
+    Description: "API Gateway endpoint URL for Prod stage for Fuel Prices Database Update function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/update/"
+  UpdatePricesFunction:
+    Description: "Fuel Prices Update Lambda Function ARN"
+    Value: !GetAtt UpdatePricesDatabase.Arn
+  UpdatePricesIamRole:
+    Description: "Implicit IAM Role created for Hello World function"
+    Value: !GetAtt UpdatePricesDatabaseRole.Arn
