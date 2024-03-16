@@ -1,13 +1,17 @@
+import os
 import json
 import boto3 
 import requests
 from decimal import Decimal
 
-database = boto3.resource('dynamodb')
+if os.environ.get('LOCAL') == "true":
+    database = boto3.resource('dynamodb', endpoint_url="http://dynamodb-local:8000")
+else:
+    database = boto3.resource('dynamodb')
+    
 fuel_prices = database.Table("current_fuel_prices")
 
 URI = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
-API_KEY = "FPDAPI SubscriberToken=92959395-6bdb-46e3-bbaa-2fce47b33752"
 
 
 def convert_to_decimal(data):
@@ -48,10 +52,11 @@ def post_prices(price_list):
 
     # batch write the items to the database.
     print("writing to database.")
-    with fuel_prices.batch_writer() as batch:
-        for i, item in enumerate(decimal_prices):
-            if i % 100 == 0:
+    for i, item in enumerate(decimal_prices):
+        with fuel_prices.batch_writer() as batch:
+            if i % 25 == 0:
                 print("%d items processed of %d." % (i, len(decimal_prices)))
+                break
             res = batch.put_item(Item=item)
 
     print("success!")

@@ -1,0 +1,44 @@
+name: AWS deploy
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - aws/**
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ["1.22.x"]
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: setup-go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: setup-aws-sam
+        uses: aws-actions/setup-sam@v1
+      - uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-southeast-2
+
+      # sam build
+      - name: build
+        run: |
+          cd ./aws
+          sam build --use-container
+          sam deploy --no-execute-changeset  --no-confirm-changeset --no-fail-on-empty-changeset
+
+      # Run Unit tests- Specify unit tests here
+
+      # sam deploy
+      # - run: |
+      #     sam deploy --no-execute-changeset  --no-confirm-changeset --no-fail-on-empty-changeset
