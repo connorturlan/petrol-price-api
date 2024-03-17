@@ -15,14 +15,16 @@ import (
 )
 
 const (
-	region    string = "ap-southeast-2"
-	tableName string = "current_fuel_prices"
-	batchSize int    = 25
-	fuelURL   string = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
+	region          string = "ap-southeast-2"
+	pricesTableName string = "current_fuel_prices"
+	sitesTableName  string = "current_fuel_prices"
+	batchSize       int    = 25
+	fuelURL         string = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
 )
 
 var (
-	apikey string = os.Getenv("APIKEY")
+	isLocal bool   = os.Getenv("local") == "true"
+	apikey  string = os.Getenv("api_key")
 )
 
 type FuelPrices struct {
@@ -38,8 +40,11 @@ type FuelPrice struct {
 }
 
 func getClient() *dynamodb.DynamoDB {
-	// config := aws.NewConfig().WithRegion(region)
-	config := aws.NewConfig().WithRegion(region).WithEndpoint("http://dynamodb-local:8000")
+	config := aws.NewConfig().WithRegion(region)
+	if isLocal {
+		fmt.Println("Using local endpoint.")
+		config = config.WithEndpoint("http://dynamodb-local:8000")
+	}
 
 	session, err := session.NewSession()
 	if err != nil {
@@ -53,7 +58,7 @@ func createTable(client *dynamodb.DynamoDB) error {
 	fmt.Println("Creating new table!")
 
 	_, err := client.CreateTable(&dynamodb.CreateTableInput{
-		TableName: aws.String(tableName),
+		TableName: aws.String(pricesTableName),
 		AttributeDefinitions: []*dynamodb.AttributeDefinition{
 			{
 				AttributeName: aws.String("SiteId"),
@@ -94,7 +99,7 @@ func checkTableExists(client *dynamodb.DynamoDB) bool {
 		tables = append(tables, *table)
 	}
 
-	return slices.Contains(tables, tableName)
+	return slices.Contains(tables, pricesTableName)
 }
 
 func respondWithStdErr(err error) (events.APIGatewayProxyResponse, error) {
@@ -116,32 +121,60 @@ func handleCors(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 }
 
 func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// create the dynamo dbClient.
-	dbClient := getClient()
+	// check the path and route based on that.
+	switch request.Path {
+	case "/prices":
+		return events.APIGatewayProxyResponse{
+			StatusCode: 200,
+			Body:       fmt.Sprintf("Prices Look Good! Apikey: %s\n", apikey),
+			Headers: map[string]string{
+				"Access-Control-Allow-Headers": "*",
+				"Access-Control-Allow-Origin":  "*",
+				"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
+			},
+		}, nil
 
-	// validate the table exists.
-	fmt.Println("checking table exists.")
-	if !checkTableExists(dbClient) {
-		createTable(dbClient)
-		respondWithStdErr(nil)
+	case "/sites":
+		return events.APIGatewayProxyResponse{
+			StatusCode: 200,
+			Body:       fmt.Sprintf("Sites Look Good! Apikey: %s\n", apikey),
+			Headers: map[string]string{
+				"Access-Control-Allow-Headers": "*",
+				"Access-Control-Allow-Origin":  "*",
+				"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
+			},
+		}, nil
+
+	default:
+		return respondWithStdErr(nil)
 	}
 
-	// return.
-	return events.APIGatewayProxyResponse{
-		StatusCode: 200,
-		Body:       "Looks Good!",
-		Headers: map[string]string{
-			"Access-Control-Allow-Headers": "*",
-			"Access-Control-Allow-Origin":  "*",
-			"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
-		},
-	}, nil
+	// // create the dynamo dbClient.
+	// dbClient := getClient()
+
+	// // validate the table exists.
+	// fmt.Println("checking table exists.")
+	// if !checkTableExists(dbClient) {
+	// 	createTable(dbClient)
+	// 	respondWithStdErr(nil)
+	// }
+
+	// // return.
+	// return events.APIGatewayProxyResponse{
+	// 	StatusCode: 200,
+	// 	Body:       fmt.Sprintf("Looks Good! Apikey: %s\n", apikey),
+	// 	Headers: map[string]string{
+	// 		"Access-Control-Allow-Headers": "*",
+	// 		"Access-Control-Allow-Origin":  "*",
+	// 		"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
+	// 	},
+	// }, nil
 }
 
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	switch request.HTTPMethod {
-	case http.MethodOptions:
-		return handleCors(request)
+	// case http.MethodOptions:
+	// 	return handleCors(request)
 	case http.MethodGet:
 		return handleGet(request)
 	default:

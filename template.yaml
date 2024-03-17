@@ -12,44 +12,7 @@ Globals:
     MemorySize: 128
 
 Resources:
-  FuelPriceService:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
-    Properties:
-      CodeUri: src/
-      Handler: app.lambda_handler
-      Runtime: python3.10
-      Architectures:
-        - x86_64
-      Environment:
-        Variables:
-          LOCAL: false
-          VALIDATE_UNIQUE: false
-      Events:
-        HelloWorld:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
-          Properties:
-            Path: /hello
-            Method: get
-
   UpdatePricesDatabase:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
-    Properties:
-      CodeUri: src/python
-      Handler: app.lambda_updateDatabase
-      Runtime: python3.10
-      Architectures:
-        - x86_64
-      Events:
-        HelloWorld:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
-          Properties:
-            Path: /update-py
-            Method: get
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: current_fuel_prices
-
-  GoUpdatePricesDatabase:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
       CodeUri: src/update/
@@ -65,13 +28,13 @@ Resources:
             Method: GET
       Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
         Variables:
-          LOCAL: false
-          APIKEY: ""
+          local: false
+          api_key: ""
       Policies:
         - DynamoDBCrudPolicy:
             TableName: current_fuel_prices
 
-  GoFetchPricesDatabase:
+  ReturnPricesDatabase:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
       CodeUri: src/fetch/
@@ -80,15 +43,22 @@ Resources:
       Architectures:
         - x86_64
       Events:
-        BookingEvent:
+        PricesEvent:
           Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
           Properties:
             Path: /prices
             Method: GET
+          Parameters:
+            Lati: Sting
+        SitesEvent:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /sites
+            Method: GET
       Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
         Variables:
-          LOCAL: false
-          APIKEY: ""
+          local: false
+          api_key: ""
       Policies:
         - DynamoDBCrudPolicy:
             TableName: current_fuel_prices
@@ -97,15 +67,9 @@ Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
   # Find out more about other implicit resources you can reference within SAM
   # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
-  UpdatePricesAPI:
+  FuelPriceAPI:
     Description: "API Gateway endpoint URL for Prod stage for Hello World function"
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/{proxy+}/"
-  FuelPriceService:
-    Description: "Hello World Lambda Function ARN"
-    Value: !GetAtt FuelPriceService.Arn
-  FuelPriceServiceIamRole:
-    Description: "Implicit IAM Role created for Hello World function"
-    Value: !GetAtt FuelPriceServiceRole.Arn
 
   UpdatePricesFunction:
     Description: "Fuel Prices Update Lambda Function ARN"
@@ -114,16 +78,9 @@ Outputs:
     Description: "Implicit IAM Role created for Hello World function"
     Value: !GetAtt UpdatePricesDatabaseRole.Arn
 
-  GoUpdatePricesFunction:
+  ReturnPricesFunction:
     Description: "Fuel Prices Update Lambda Function ARN"
-    Value: !GetAtt GoUpdatePricesDatabase.Arn
-  GoUpdatePricesIamRole:
+    Value: !GetAtt ReturnPricesDatabase.Arn
+  ReturnPricesIamRole:
     Description: "Implicit IAM Role created for Hello World function"
-    Value: !GetAtt GoUpdatePricesDatabaseRole.Arn
-
-  GoFetchPricesFunction:
-    Description: "Fuel Prices Update Lambda Function ARN"
-    Value: !GetAtt GoFetchPricesDatabase.Arn
-  GoFetchPricesIamRole:
-    Description: "Implicit IAM Role created for Hello World function"
-    Value: !GetAtt GoFetchPricesDatabaseRole.Arn
+    Value: !GetAtt ReturnPricesDatabaseRole.Arn

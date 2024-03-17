@@ -20,14 +20,16 @@ import (
 )
 
 const (
-	region    string = "ap-southeast-2"
-	tableName string = "current_fuel_prices"
-	batchSize int    = 25
-	fuelURL   string = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
+	region          string = "ap-southeast-2"
+	pricesTableName string = "current_fuel_prices"
+	sitesTableName  string = "current_fuel_prices"
+	batchSize       int    = 25
+	fuelURL         string = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
 )
 
 var (
-	apikey string = os.Getenv("APIKEY")
+	isLocal bool   = os.Getenv("local") == "true"
+	apikey  string = os.Getenv("api_key")
 )
 
 type FuelPrices struct {
@@ -43,8 +45,11 @@ type FuelPrice struct {
 }
 
 func getClient() *dynamodb.DynamoDB {
-	// config := aws.NewConfig().WithRegion(region)
-	config := aws.NewConfig().WithRegion(region).WithEndpoint("http://dynamodb-local:8000")
+	config := aws.NewConfig().WithRegion(region)
+	if isLocal {
+		fmt.Println("Using local endpoint.")
+		config = config.WithEndpoint("http://dynamodb-local:8000")
+	}
 
 	session, err := session.NewSession()
 	if err != nil {
@@ -58,7 +63,7 @@ func createTable(client *dynamodb.DynamoDB) error {
 	fmt.Println("Creating new table!")
 
 	_, err := client.CreateTable(&dynamodb.CreateTableInput{
-		TableName: aws.String(tableName),
+		TableName: aws.String(pricesTableName),
 		AttributeDefinitions: []*dynamodb.AttributeDefinition{
 			{
 				AttributeName: aws.String("SiteId"),
@@ -99,19 +104,19 @@ func checkTableExists(client *dynamodb.DynamoDB) bool {
 		tables = append(tables, *table)
 	}
 
-	return slices.Contains(tables, tableName)
+	return slices.Contains(tables, pricesTableName)
 }
 
 func respondWithStdErr(err error) (events.APIGatewayProxyResponse, error) {
 	return events.APIGatewayProxyResponse{
 		Body:       err.Error(),
-		StatusCode: 500,
+		StatusCode: http.StatusInternalServerError,
 	}, err
 }
 
 func handleCors(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	return events.APIGatewayProxyResponse{
-		StatusCode: 200,
+		StatusCode: http.StatusOK,
 		Headers: map[string]string{
 			"Access-Control-Allow-Headers": "*",
 			"Access-Control-Allow-Origin":  "*",
@@ -143,6 +148,7 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 	req.Header.Set("Authorization", apikey)
 
 	// - read the body
+	fmt.Printf("Sending request, apikey: %s\n", apikey)
 	res, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Println("Error while sending http request.")
@@ -160,6 +166,7 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 	err = json.Unmarshal(body, &prices)
 	if err != nil {
 		fmt.Println("Error while unmarshalling fuel prices.")
+		fmt.Println(body)
 		return respondWithStdErr(err)
 	}
 
@@ -175,11 +182,11 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 		for _, price := range allPrices[n:end] {
 			// - marshall the struct
 			item = map[string]*dynamodb.AttributeValue{
-				"SiteId":             {N: aws.String(fmt.Sprintf("%d", price.SiteID))},
-				"FuelId":             {N: aws.String(fmt.Sprintf("%d", price.FuelID))},
-				"CollectionMethod":   {S: aws.String(price.CollectionMethod)},
-				"TransactionDateUtc": {S: aws.String(price.TransactionDateUTC)},
-				"Price":              {N: aws.String(decimal.NewFromFloat(price.Price).String())},
+				"SiteId": {N: aws.String(fmt.Sprintf("%d", price.SiteID))},
+				"FuelId": {N: aws.String(fmt.Sprintf("%d", price.FuelID))},
+				"M":      {S: aws.String(price.CollectionMethod)},
+				"D":      {S: aws.String(price.TransactionDateUTC)},
+				"P":      {N: aws.String(decimal.NewFromFloat(price.Price).String())},
 			}
 
 			// - append the write req
@@ -187,7 +194,7 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 		}
 
 		// - send the batch
-		batchReq := dynamodb.BatchWriteItemInput{RequestItems: map[string][]*dynamodb.WriteRequest{tableName: writeReqs}}
+		batchReq := dynamodb.BatchWriteItemInput{RequestItems: map[string][]*dynamodb.WriteRequest{pricesTableName: writeReqs}}
 		if _, err = dbClient.BatchWriteItem(&batchReq); err != nil {
 			fmt.Println("Error while sending batch write item.")
 			return respondWithStdErr(err)
@@ -200,7 +207,7 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 
 	// return.
 	return events.APIGatewayProxyResponse{
-		StatusCode: 200,
+		StatusCode: http.StatusAccepted,
 		Body:       fmt.Sprintf("%d records updated.\n", len(allPrices)),
 		Headers: map[string]string{
 			"Access-Control-Allow-Headers": "*",
@@ -218,7 +225,7 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		return handleGet(request)
 	default:
 		return events.APIGatewayProxyResponse{
-			StatusCode: 400,
+			StatusCode: http.StatusBadRequest,
 		}, nil
 	}
 }
