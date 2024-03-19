@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -17,7 +19,7 @@ import (
 const (
 	region          string = "ap-southeast-2"
 	pricesTableName string = "current_fuel_prices"
-	sitesTableName  string = "current_fuel_prices"
+	sitesTableName  string = "safpis_fuel_sites"
 	batchSize       int    = 25
 	fuelURL         string = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
 )
@@ -39,6 +41,12 @@ type FuelPrice struct {
 	Price              float64 `json:"Price"`
 }
 
+type PetrolStationSite struct {
+	Name string  `json:"Name"`
+	Lat  float64 `json:"Lat"`
+	Lng  float64 `json:"Lng"`
+}
+
 func getClient() *dynamodb.DynamoDB {
 	config := aws.NewConfig().WithRegion(region)
 	if isLocal {
@@ -54,41 +62,7 @@ func getClient() *dynamodb.DynamoDB {
 	return dynamodb.New(session, config)
 }
 
-func createTable(client *dynamodb.DynamoDB) error {
-	fmt.Println("Creating new table!")
-
-	_, err := client.CreateTable(&dynamodb.CreateTableInput{
-		TableName: aws.String(pricesTableName),
-		AttributeDefinitions: []*dynamodb.AttributeDefinition{
-			{
-				AttributeName: aws.String("SiteId"),
-				AttributeType: aws.String("N"),
-			},
-			{
-				AttributeName: aws.String("FuelId"),
-				AttributeType: aws.String("N"),
-			},
-		},
-		KeySchema: []*dynamodb.KeySchemaElement{
-			{
-				AttributeName: aws.String("SiteId"),
-				KeyType:       aws.String("HASH"),
-			},
-			{
-				AttributeName: aws.String("FuelId"),
-				KeyType:       aws.String("RANGE"),
-			},
-		},
-		ProvisionedThroughput: &dynamodb.ProvisionedThroughput{
-			ReadCapacityUnits:  aws.Int64(1),
-			WriteCapacityUnits: aws.Int64(1),
-		},
-	})
-
-	return err
-}
-
-func checkTableExists(client *dynamodb.DynamoDB) bool {
+func checkTableExists(client *dynamodb.DynamoDB, tableName string) bool {
 	awsTables, err := client.ListTables(&dynamodb.ListTablesInput{})
 	if err != nil {
 		return false
@@ -99,10 +73,76 @@ func checkTableExists(client *dynamodb.DynamoDB) bool {
 		tables = append(tables, *table)
 	}
 
-	return slices.Contains(tables, pricesTableName)
+	return slices.Contains(tables, tableName)
+}
+
+func getAllSites() (events.APIGatewayProxyResponse, error) {
+	// get dbclient
+	client := getClient()
+
+	if !checkTableExists(client, sitesTableName) {
+		return respondWithStdErr(nil)
+	}
+
+	// get all sites
+	// - send req
+	fmt.Println("Getting all sites.")
+	allSitesRaw, err := client.Scan(&dynamodb.ScanInput{
+		TableName: aws.String(sitesTableName),
+	})
+	if err != nil {
+		return respondWithStdErr(err)
+	}
+
+	// - trim
+	fmt.Printf("Trimming all sites. %d items\n", len(allSitesRaw.Items))
+	allSites := []PetrolStationSite{}
+	for _, rawsite := range allSitesRaw.Items {
+		fmt.Println(rawsite)
+
+		name := *rawsite["N"].S
+
+		lat, err := strconv.ParseFloat(*rawsite["Lt"].N, 64)
+		if err != nil {
+			return respondWithStdErr(err)
+		}
+
+		lng, err := strconv.ParseFloat(*rawsite["Lg"].N, 64)
+		if err != nil {
+			return respondWithStdErr(err)
+		}
+
+		site := PetrolStationSite{
+			Name: name,
+			Lat:  float64(lat),
+			Lng:  float64(lng),
+		}
+
+		allSites = append(allSites, site)
+	}
+
+	// - marshall
+	fmt.Println("Marshalling all sites.")
+	bytes, err := json.Marshal(allSites)
+	if err != nil {
+		return respondWithStdErr(err)
+	}
+
+	fmt.Println("Done!")
+	return events.APIGatewayProxyResponse{
+		StatusCode: 200,
+		Body:       string(bytes),
+	}, nil
 }
 
 func respondWithStdErr(err error) (events.APIGatewayProxyResponse, error) {
+	if err == nil {
+		return events.APIGatewayProxyResponse{
+			Body:       "an error occured.",
+			StatusCode: 500,
+		}, err
+	}
+
 	return events.APIGatewayProxyResponse{
 		Body:       err.Error(),
 		StatusCode: 500,
@@ -139,18 +179,20 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 		}, nil
 
 	case "/sites":
-		latitude := request.QueryStringParameters["lat"]
-		longitude := request.QueryStringParameters["long"]
+		return getAllSites()
 
-		return events.APIGatewayProxyResponse{
-			StatusCode: 200,
-			Body:       fmt.Sprintf("Sites Look Good! pos@%s.%s\n", latitude, longitude),
-			Headers: map[string]string{
-				"Access-Control-Allow-Headers": "*",
-				"Access-Control-Allow-Origin":  "*",
-				"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
-			},
-		}, nil
+		// latitude := request.QueryStringParameters["lat"]
+		// longitude := request.QueryStringParameters["long"]
+
+		// return events.APIGatewayProxyResponse{
+		// 	StatusCode: 200,
+		// 	Body:       fmt.Sprintf("Sites Look Good! pos@%s.%s\n", latitude, longitude),
+		// 	Headers: map[string]string{
+		// 		"Access-Control-Allow-Headers": "*",
+		// 		"Access-Control-Allow-Origin":  "*",
+		// 		"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
+		// 	},
+		// }, nil
 
 	default:
 		return respondWithStdErr(nil)
@@ -180,10 +222,18 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	switch request.HTTPMethod {
-	// case http.MethodOptions:
-	// 	return handleCors(request)
+	case http.MethodOptions:
+		return handleCors(request)
 	case http.MethodGet:
-		return handleGet(request)
+		res, err := handleGet(request)
+		res.Headers =
+			map[string]string{
+				"Access-Control-Allow-Headers": "*",
+				"Access-Control-Allow-Origin":  "*",
+				"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
+			}
+
+		return res, err
 	default:
 		return events.APIGatewayProxyResponse{
 			StatusCode: 400,
