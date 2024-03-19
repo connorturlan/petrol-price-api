@@ -29,6 +29,7 @@ Resources:
       Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
         Variables:
           local: false
+          update_sites: true
           api_key: ""
       Policies:
         - DynamoDBCrudPolicy:
@@ -55,7 +56,7 @@ Resources:
           Properties:
             Path: /sites
             Method: GET
-      Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
+      Environment: # More info about Env Vars: https://github.com/awslabsW/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
         Variables:
           local: false
           api_key: ""

@@ -22,17 +22,18 @@ import (
 const (
 	region          string = "ap-southeast-2"
 	pricesTableName string = "current_fuel_prices"
-	sitesTableName  string = "current_fuel_prices"
+	sitesTableName  string = "safpis_fuel_sites"
 	batchSize       int    = 25
 	fuelURL         string = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
 )
 
 var (
-	isLocal bool   = os.Getenv("local") == "true"
-	apikey  string = os.Getenv("api_key")
+	isLocal         bool   = os.Getenv("local") == "true"
+	isUpdatingSites bool   = os.Getenv("update_sites") == "true"
+	apikey          string = os.Getenv("api_key")
 )
 
-type FuelPrices struct {
+type FuelPriceList struct {
 	Prices []FuelPrice `json:"SitePrices"`
 }
 
@@ -42,6 +43,20 @@ type FuelPrice struct {
 	CollectionMethod   string  `json:"CollectionMethod"`
 	TransactionDateUTC string  `json:"TransactionDateUTC"`
 	Price              float64 `json:"Price"`
+}
+
+type PetrolStationList struct {
+	Sites []PetrolStationSite `json:"S"`
+}
+
+type PetrolStationSite struct {
+	SiteID    int     `json:"S"`
+	Address   string  `json:"A"`
+	Name      string  `json:"N"`
+	BrandID   int     `json:"B"`
+	Postcode  string  `json:"P"`
+	Latitude  float64 `json:"Lat"`
+	Longitude float64 `json:"Lng"`
 }
 
 func getClient() *dynamodb.DynamoDB {
@@ -59,7 +74,7 @@ func getClient() *dynamodb.DynamoDB {
 	return dynamodb.New(session, config)
 }
 
-func createTable(client *dynamodb.DynamoDB) error {
+func createPriceTable(client *dynamodb.DynamoDB) error {
 	fmt.Println("Creating new table!")
 
 	_, err := client.CreateTable(&dynamodb.CreateTableInput{
@@ -93,7 +108,33 @@ func createTable(client *dynamodb.DynamoDB) error {
 	return err
 }
 
-func checkTableExists(client *dynamodb.DynamoDB) bool {
+func createSiteTable(client *dynamodb.DynamoDB) error {
+	fmt.Println("Creating new table!")
+
+	_, err := client.CreateTable(&dynamodb.CreateTableInput{
+		TableName: aws.String(sitesTableName),
+		AttributeDefinitions: []*dynamodb.AttributeDefinition{
+			{
+				AttributeName: aws.String("SiteId"),
+				AttributeType: aws.String("N"),
+			},
+		},
+		KeySchema: []*dynamodb.KeySchemaElement{
+			{
+				AttributeName: aws.String("SiteId"),
+				KeyType:       aws.String("HASH"),
+			},
+		},
+		ProvisionedThroughput: &dynamodb.ProvisionedThroughput{
+			ReadCapacityUnits:  aws.Int64(1),
+			WriteCapacityUnits: aws.Int64(1),
+		},
+	})
+
+	return err
+}
+
+func checkTableExists(client *dynamodb.DynamoDB, tableName string) bool {
 	awsTables, err := client.ListTables(&dynamodb.ListTablesInput{})
 	if err != nil {
 		return false
@@ -104,7 +145,7 @@ func checkTableExists(client *dynamodb.DynamoDB) bool {
 		tables = append(tables, *table)
 	}
 
-	return slices.Contains(tables, pricesTableName)
+	return slices.Contains(tables, tableName)
 }
 
 func respondWithStdErr(err error) (events.APIGatewayProxyResponse, error) {
@@ -112,6 +153,39 @@ func respondWithStdErr(err error) (events.APIGatewayProxyResponse, error) {
 		Body:       err.Error(),
 		StatusCode: http.StatusInternalServerError,
 	}, err
+}
+
+func sendJsonRequest[T interface{}](url string, obj *T) error {
+	httpClient := &http.Client{}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Println("Error while creating http client.")
+		return err
+	}
+	req.Header.Set("Authorization", apikey)
+
+	// - read the body
+	fmt.Printf("Sending request, apikey: %s\n", apikey)
+	res, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Println("Error while sending http request.")
+		return err
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		log.Fatalln(err)
+		return err
+	}
+
+	// - unmarshall the json
+	err = json.Unmarshal(body, &obj)
+	if err != nil {
+		fmt.Println("Error while unmarshalling json body.")
+		fmt.Println(string(body))
+		return err
+	}
+	return nil
 }
 
 func handleCors(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -125,48 +199,19 @@ func handleCors(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 	}, nil
 }
 
-func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// create the dynamo dbClient.
-	dbClient := getClient()
-
+func getAllPrices(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, error) {
 	// validate the table exists.
-	fmt.Println("checking table exists.")
-	if !checkTableExists(dbClient) {
-		createTable(dbClient)
-		respondWithStdErr(nil)
+	fmt.Println("checking prices table exists.")
+	if !checkTableExists(dbClient, pricesTableName) {
+		createPriceTable(dbClient)
 	}
 
 	// get the fuel prices.
 	// - create the request.
-	httpClient := &http.Client{}
+	var prices FuelPriceList
 	pricesEndpoint := fuelURL + "/Price/GetSitesPrices?countryId=21&geoRegionLevel=3&geoRegionId=4"
-	req, err := http.NewRequest(http.MethodGet, pricesEndpoint, nil)
+	err := sendJsonRequest(pricesEndpoint, &prices)
 	if err != nil {
-		fmt.Println("Error while creating http client.")
-		return respondWithStdErr(err)
-	}
-	req.Header.Set("Authorization", apikey)
-
-	// - read the body
-	fmt.Printf("Sending request, apikey: %s\n", apikey)
-	res, err := httpClient.Do(req)
-	if err != nil {
-		fmt.Println("Error while sending http request.")
-		return respondWithStdErr(err)
-	}
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		log.Fatalln(err)
-		return respondWithStdErr(err)
-	}
-
-	// - unmarshall the json
-	var prices FuelPrices
-	err = json.Unmarshal(body, &prices)
-	if err != nil {
-		fmt.Println("Error while unmarshalling fuel prices.")
-		fmt.Println(body)
 		return respondWithStdErr(err)
 	}
 
@@ -201,14 +246,90 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 		}
 
 		n += batchSize
-		fmt.Printf("updated %d/%d records in database.\n", n, len(allPrices))
+		fmt.Printf("updated ~%d/%d records in database.\n", end, len(allPrices))
 	}
 	fmt.Printf("done!.\n")
+
+	return events.APIGatewayProxyResponse{}, nil
+}
+
+func getAllSites(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, error) {
+	// validate the table exists.
+	fmt.Println("checking sites table exists.")
+	if !checkTableExists(dbClient, sitesTableName) {
+		createSiteTable(dbClient)
+	}
+
+	// get the sites date.
+	// - create the request.
+	var sites PetrolStationList
+	sitesEndpoint := fuelURL + "/Subscriber/GetFullSiteDetails?countryId=21&geoRegionLevel=3&geoRegionId=4"
+	err := sendJsonRequest(sitesEndpoint, &sites)
+	if err != nil {
+		return respondWithStdErr(err)
+	}
+
+	// update the database.
+	var item map[string]*dynamodb.AttributeValue
+
+	allSites := sites.Sites
+	fmt.Printf("updating %d records in database.\n", len(allSites))
+	for n := 0; n < len(allSites); {
+		var writeReqs []*dynamodb.WriteRequest
+
+		end := min(n+batchSize, len(allSites))
+		for _, petrolStation := range allSites[n:end] {
+			// - marshall the struct
+			item = map[string]*dynamodb.AttributeValue{
+				"SiteId": {N: aws.String(fmt.Sprintf("%d", petrolStation.SiteID))},
+				"A":      {S: aws.String(petrolStation.Address)},
+				"N":      {S: aws.String(petrolStation.Name)},
+				"B":      {N: aws.String(fmt.Sprintf("%d", petrolStation.BrandID))},
+				"P":      {S: aws.String(petrolStation.Postcode)},
+				"Lt":     {N: aws.String(decimal.NewFromFloat(petrolStation.Latitude).String())},
+				"Lg":     {N: aws.String(decimal.NewFromFloat(petrolStation.Longitude).String())},
+			}
+
+			// - append the write req
+			writeReqs = append(writeReqs, &dynamodb.WriteRequest{PutRequest: &dynamodb.PutRequest{Item: item}})
+		}
+
+		// - send the batch
+		batchReq := dynamodb.BatchWriteItemInput{RequestItems: map[string][]*dynamodb.WriteRequest{sitesTableName: writeReqs}}
+		if _, err = dbClient.BatchWriteItem(&batchReq); err != nil {
+			fmt.Println("Error while sending batch write item.")
+			return respondWithStdErr(err)
+		}
+
+		n += batchSize
+		fmt.Printf("updated ~%d/%d records in database.\n", end, len(allSites))
+	}
+	fmt.Printf("done!.\n")
+
+	return events.APIGatewayProxyResponse{}, nil
+}
+
+func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	var err error
+
+	// create the dynamo dbClient.
+	dbClient := getClient()
+
+	_, err = getAllPrices(dbClient)
+	if err != nil {
+		return respondWithStdErr(err)
+	}
+
+	if isUpdatingSites {
+		_, err = getAllSites(dbClient)
+		if err != nil {
+			return respondWithStdErr(err)
+		}
+	}
 
 	// return.
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusAccepted,
-		Body:       fmt.Sprintf("%d records updated.\n", len(allPrices)),
 		Headers: map[string]string{
 			"Access-Control-Allow-Headers": "*",
 			"Access-Control-Allow-Origin":  "*",

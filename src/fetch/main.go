@@ -124,9 +124,13 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 	// check the path and route based on that.
 	switch request.Path {
 	case "/prices":
+		latitude := request.QueryStringParameters["lat"]
+		longitude := request.QueryStringParameters["long"]
+		fuelType := request.QueryStringParameters["fuelType"]
+
 		return events.APIGatewayProxyResponse{
 			StatusCode: 200,
-			Body:       fmt.Sprintf("Prices Look Good! Apikey: %s\n", apikey),
+			Body:       fmt.Sprintf("Prices Look Good! pos@%s.%s for %s\n", latitude, longitude, fuelType),
 			Headers: map[string]string{
 				"Access-Control-Allow-Headers": "*",
 				"Access-Control-Allow-Origin":  "*",
@@ -135,9 +139,12 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 		}, nil
 
 	case "/sites":
+		latitude := request.QueryStringParameters["lat"]
+		longitude := request.QueryStringParameters["long"]
+
 		return events.APIGatewayProxyResponse{
 			StatusCode: 200,
-			Body:       fmt.Sprintf("Sites Look Good! Apikey: %s\n", apikey),
+			Body:       fmt.Sprintf("Sites Look Good! pos@%s.%s\n", latitude, longitude),
 			Headers: map[string]string{
 				"Access-Control-Allow-Headers": "*",
 				"Access-Control-Allow-Origin":  "*",
