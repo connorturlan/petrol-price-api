@@ -98,8 +98,6 @@ func getAllSites() (events.APIGatewayProxyResponse, error) {
 	fmt.Printf("Trimming all sites. %d items\n", len(allSitesRaw.Items))
 	allSites := []PetrolStationSite{}
 	for _, rawsite := range allSitesRaw.Items {
-		fmt.Println(rawsite)
-
 		name := *rawsite["N"].S
 
 		lat, err := strconv.ParseFloat(*rawsite["Lt"].N, 64)

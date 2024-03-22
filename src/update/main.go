@@ -99,9 +99,10 @@ func createPriceTable(client *dynamodb.DynamoDB) error {
 				KeyType:       aws.String("RANGE"),
 			},
 		},
+
 		ProvisionedThroughput: &dynamodb.ProvisionedThroughput{
-			ReadCapacityUnits:  aws.Int64(1),
-			WriteCapacityUnits: aws.Int64(1),
+			ReadCapacityUnits:  aws.Int64(10),
+			WriteCapacityUnits: aws.Int64(10),
 		},
 	})
 
@@ -126,8 +127,8 @@ func createSiteTable(client *dynamodb.DynamoDB) error {
 			},
 		},
 		ProvisionedThroughput: &dynamodb.ProvisionedThroughput{
-			ReadCapacityUnits:  aws.Int64(1),
-			WriteCapacityUnits: aws.Int64(1),
+			ReadCapacityUnits:  aws.Int64(2),
+			WriteCapacityUnits: aws.Int64(2),
 		},
 	})
 
@@ -203,7 +204,10 @@ func getAllPrices(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, 
 	// validate the table exists.
 	fmt.Println("checking prices table exists.")
 	if !checkTableExists(dbClient, pricesTableName) {
-		createPriceTable(dbClient)
+		err := createPriceTable(dbClient)
+		if err != nil {
+			return respondWithStdErr(err)
+		}
 	}
 
 	// get the fuel prices.
@@ -257,7 +261,10 @@ func getAllSites(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, e
 	// validate the table exists.
 	fmt.Println("checking sites table exists.")
 	if !checkTableExists(dbClient, sitesTableName) {
-		createSiteTable(dbClient)
+		err := createSiteTable(dbClient)
+		if err != nil {
+			return respondWithStdErr(err)
+		}
 	}
 
 	// get the sites date.
