@@ -46,7 +46,7 @@ type SA_FuelPrice struct {
 }
 
 type FuelPriceList struct {
-	Stations map[int]FuelStation `json:"SitePrices"`
+	Prices map[int]FuelStation `json:"SitePrices"`
 }
 
 type FuelStation struct {
@@ -91,20 +91,28 @@ func getClient() *dynamodb.DynamoDB {
 }
 
 func createPriceTable(client *dynamodb.DynamoDB) error {
-	fmt.Println("Creating new table!")
+	fmt.Println("Creating new prices table!")
 
 	_, err := client.CreateTable(&dynamodb.CreateTableInput{
 		TableName: aws.String(pricesTableName),
 		AttributeDefinitions: []*dynamodb.AttributeDefinition{
 			{
 				AttributeName: aws.String("SiteId"),
-				AttributeType: aws.String("S"),
+				AttributeType: aws.String("N"),
+			},
+			{
+				AttributeName: aws.String("FuelId"),
+				AttributeType: aws.String("N"),
 			},
 		},
 		KeySchema: []*dynamodb.KeySchemaElement{
 			{
 				AttributeName: aws.String("SiteId"),
 				KeyType:       aws.String("HASH"),
+			},
+			{
+				AttributeName: aws.String("FuelId"),
+				KeyType:       aws.String("RANGE"),
 			},
 		},
 
@@ -118,7 +126,7 @@ func createPriceTable(client *dynamodb.DynamoDB) error {
 }
 
 func createSiteTable(client *dynamodb.DynamoDB) error {
-	fmt.Println("Creating new table!")
+	fmt.Println("Creating new sites table!")
 
 	_, err := client.CreateTable(&dynamodb.CreateTableInput{
 		TableName: aws.String(sitesTableName),
@@ -228,19 +236,19 @@ func getAllPrices(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, 
 	}
 
 	// convert the SA_FuelPriceList to the local FuelPriceList
-	// var data FuelPriceList
+	// var prices FuelPriceList
 	// for _, price := range saPrices.Prices {
 	// 	// get the required ids.
 	// 	siteId := price.SiteID
 	// 	fuelId := price.FuelID
 
 	// 	// ensure the fuel station exists.
-	// 	if _, ok := data.Stations[siteId]; !ok {
-	// 		data.Stations[siteId] = FuelStation{}
+	// 	if _, ok := prices.Prices[siteId]; !ok {
+	// 		prices.Prices[siteId] = FuelStation{}
 	// 	}
 
 	// 	// convert the price into the fuel price required for the db.
-	// 	data.Stations[siteId].FuelTypes[fuelId] = FuelPrice{
+	// 	prices.Prices[siteId].FuelTypes[fuelId] = FuelPrice{
 	// 		FuelID:             price.FuelID,
 	// 		CollectionMethod:   price.CollectionMethod,
 	// 		TransactionDateUTC: price.TransactionDateUTC,
@@ -260,7 +268,7 @@ func getAllPrices(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, 
 		for _, price := range allPrices[n:end] {
 			// - marshall the struct
 			item = map[string]*dynamodb.AttributeValue{
-				"SiteId": {S: aws.String(fmt.Sprintf("%d:%d", price.SiteId, price.FuelId))},
+				"SiteId": {N: aws.String(fmt.Sprintf("%d", price.SiteId))},
 				"FuelId": {N: aws.String(fmt.Sprintf("%d", price.FuelId))},
 				"M":      {S: aws.String(price.CollectionMethod)},
 				"D":      {S: aws.String(price.TransactionDateUTC)},

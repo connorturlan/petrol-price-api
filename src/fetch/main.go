@@ -7,7 +7,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -222,7 +221,8 @@ func handlePost(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 			for _, siteId := range fuelSites[n:end] {
 				// - marshall the struct
 				item = map[string]*dynamodb.AttributeValue{
-					"SiteId": {S: aws.String(fmt.Sprintf("%d:%s", siteId, fuelId))},
+					"SiteId": {N: aws.String(fmt.Sprintf("%d", siteId))},
+					"FuelId": {N: aws.String(fuelId)},
 				}
 
 				// - append the write req
@@ -244,7 +244,8 @@ func handlePost(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 			}
 
 			for _, item := range batchRes.Responses[pricesTableName] {
-				id, err := strconv.Atoi(strings.Split(*item["SiteId"].S, ":")[0])
+				// id, err := strconv.Atoi(strings.Split(*item["SiteId"].S, ":")[0])
+				id, err := strconv.Atoi(*item["SiteId"].N)
 				if err != nil {
 					return respondWithStdErr(err, "error while converting siteid to int.")
 				}
