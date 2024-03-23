@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -20,7 +21,8 @@ const (
 	region          string = "ap-southeast-2"
 	pricesTableName string = "current_fuel_prices"
 	sitesTableName  string = "safpis_fuel_sites"
-	batchSize       int    = 25
+	writeBatchSize  int    = 25
+	readBatchSize   int    = 100
 	fuelURL         string = "https://fppdirectapi-prod.safuelpricinginformation.com.au"
 )
 
@@ -34,17 +36,18 @@ type FuelPrices struct {
 }
 
 type FuelPrice struct {
-	SiteID             int     `json:"SiteID"`
-	FuelID             int     `json:"FuelID"`
+	SiteID             int     `json:"SiteId"`
+	FuelID             int     `json:"FuelId"`
 	CollectionMethod   string  `json:"CollectionMethod"`
 	TransactionDateUTC string  `json:"TransactionDateUTC"`
 	Price              float64 `json:"Price"`
 }
 
 type PetrolStationSite struct {
-	Name string  `json:"Name"`
-	Lat  float64 `json:"Lat"`
-	Lng  float64 `json:"Lng"`
+	SiteId int     `json:"SiteId"`
+	Name   string  `json:"Name"`
+	Lat    float64 `json:"Lat"`
+	Lng    float64 `json:"Lng"`
 }
 
 func getClient() *dynamodb.DynamoDB {
@@ -81,7 +84,7 @@ func getAllSites() (events.APIGatewayProxyResponse, error) {
 	client := getClient()
 
 	if !checkTableExists(client, sitesTableName) {
-		return respondWithStdErr(nil)
+		return respondWithStdErr(nil, "table doesn't exist.")
 	}
 
 	// get all sites
@@ -91,7 +94,7 @@ func getAllSites() (events.APIGatewayProxyResponse, error) {
 		TableName: aws.String(sitesTableName),
 	})
 	if err != nil {
-		return respondWithStdErr(err)
+		return respondWithStdErr(err, "")
 	}
 
 	// - trim
@@ -100,20 +103,26 @@ func getAllSites() (events.APIGatewayProxyResponse, error) {
 	for _, rawsite := range allSitesRaw.Items {
 		name := *rawsite["N"].S
 
+		SiteId, err := strconv.Atoi(*rawsite["SiteId"].N)
+		if err != nil {
+			return respondWithStdErr(err, "error while converting siteid into int.")
+		}
+
 		lat, err := strconv.ParseFloat(*rawsite["Lt"].N, 64)
 		if err != nil {
-			return respondWithStdErr(err)
+			return respondWithStdErr(err, "error while converting lat into float.")
 		}
 
 		lng, err := strconv.ParseFloat(*rawsite["Lg"].N, 64)
 		if err != nil {
-			return respondWithStdErr(err)
+			return respondWithStdErr(err, "error while converting long into float.")
 		}
 
 		site := PetrolStationSite{
-			Name: name,
-			Lat:  float64(lat),
-			Lng:  float64(lng),
+			SiteId: SiteId,
+			Name:   name,
+			Lat:    float64(lat),
+			Lng:    float64(lng),
 		}
 
 		allSites = append(allSites, site)
@@ -123,7 +132,7 @@ func getAllSites() (events.APIGatewayProxyResponse, error) {
 	fmt.Println("Marshalling all sites.")
 	bytes, err := json.Marshal(allSites)
 	if err != nil {
-		return respondWithStdErr(err)
+		return respondWithStdErr(err, "")
 	}
 
 	fmt.Println("Done!")
@@ -133,16 +142,16 @@ func getAllSites() (events.APIGatewayProxyResponse, error) {
 	}, nil
 }
 
-func respondWithStdErr(err error) (events.APIGatewayProxyResponse, error) {
+func respondWithStdErr(err error, errstring string) (events.APIGatewayProxyResponse, error) {
 	if err == nil {
 		return events.APIGatewayProxyResponse{
-			Body:       "an error occured.",
+			Body:       errstring,
 			StatusCode: 500,
 		}, err
 	}
 
 	return events.APIGatewayProxyResponse{
-		Body:       err.Error(),
+		Body:       fmt.Sprintf("%s: %s", errstring, err.Error()),
 		StatusCode: 500,
 	}, err
 }
@@ -169,74 +178,132 @@ func handleGet(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRes
 		return events.APIGatewayProxyResponse{
 			StatusCode: 200,
 			Body:       fmt.Sprintf("Prices Look Good! pos@%s.%s for %s\n", latitude, longitude, fuelType),
-			Headers: map[string]string{
-				"Access-Control-Allow-Headers": "*",
-				"Access-Control-Allow-Origin":  "*",
-				"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
-			},
 		}, nil
 
 	case "/sites":
 		return getAllSites()
-
-		// latitude := request.QueryStringParameters["lat"]
-		// longitude := request.QueryStringParameters["long"]
-
-		// return events.APIGatewayProxyResponse{
-		// 	StatusCode: 200,
-		// 	Body:       fmt.Sprintf("Sites Look Good! pos@%s.%s\n", latitude, longitude),
-		// 	Headers: map[string]string{
-		// 		"Access-Control-Allow-Headers": "*",
-		// 		"Access-Control-Allow-Origin":  "*",
-		// 		"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
-		// 	},
-		// }, nil
-
-	default:
-		return respondWithStdErr(nil)
 	}
 
-	// // create the dynamo dbClient.
-	// dbClient := getClient()
+	return respondWithStdErr(nil, "")
+}
 
-	// // validate the table exists.
-	// fmt.Println("checking table exists.")
-	// if !checkTableExists(dbClient) {
-	// 	createTable(dbClient)
-	// 	respondWithStdErr(nil)
-	// }
+func handlePost(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	// check the path and route based on that.
+	switch request.Path {
+	case "/prices":
+		// get params
+		fmt.Println("getting fuel type from params.")
+		fuelId := request.QueryStringParameters["fuelType"]
 
-	// // return.
-	// return events.APIGatewayProxyResponse{
-	// 	StatusCode: 200,
-	// 	Body:       fmt.Sprintf("Looks Good! Apikey: %s\n", apikey),
-	// 	Headers: map[string]string{
-	// 		"Access-Control-Allow-Headers": "*",
-	// 		"Access-Control-Allow-Origin":  "*",
-	// 		"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
-	// 	},
-	// }, nil
+		fmt.Println("getting sites from body.")
+		var fuelSites []int
+		err := json.Unmarshal([]byte(request.Body), &fuelSites)
+		if err != nil {
+			return respondWithStdErr(err, "")
+		}
+
+		fmt.Printf("getting prices for fuel type %s\n", fuelId)
+
+		// get prices from DB.
+		dbclient := getClient()
+		if !checkTableExists(dbclient, pricesTableName) {
+			return respondWithStdErr(nil, "prices table doesn't exist.")
+		}
+
+		// update the database.
+		var item map[string]*dynamodb.AttributeValue
+
+		allPrices := map[int]float64{}
+		fmt.Printf("fetching %d prices from database.\n", len(fuelSites))
+		for n := 0; n < len(fuelSites); {
+			attrs := []map[string]*dynamodb.AttributeValue{}
+
+			end := min(n+readBatchSize, len(fuelSites))
+			for _, siteId := range fuelSites[n:end] {
+				// - marshall the struct
+				item = map[string]*dynamodb.AttributeValue{
+					"SiteId": {S: aws.String(fmt.Sprintf("%d:%s", siteId, fuelId))},
+				}
+
+				// - append the write req
+				attrs = append(attrs, item)
+			}
+
+			// - send the batch
+			batchReq := dynamodb.BatchGetItemInput{
+				RequestItems: map[string]*dynamodb.KeysAndAttributes{
+					pricesTableName: {
+						Keys: attrs,
+					},
+				},
+			}
+			batchRes, err := dbclient.BatchGetItem(&batchReq)
+			if err != nil {
+				fmt.Println("Error while sending batch get item.")
+				return respondWithStdErr(err, "")
+			}
+
+			for _, item := range batchRes.Responses[pricesTableName] {
+				id, err := strconv.Atoi(strings.Split(*item["SiteId"].S, ":")[0])
+				if err != nil {
+					return respondWithStdErr(err, "error while converting siteid to int.")
+				}
+
+				prices, err := strconv.ParseFloat(*item["P"].N, 64)
+				if err != nil {
+					return respondWithStdErr(err, "error while converting price to float.")
+				}
+
+				allPrices[id] = prices
+			}
+
+			n += readBatchSize
+			fmt.Printf("found ~%d/%d records in database.\n", end, len(allPrices))
+		}
+		fmt.Printf("done!.\n")
+
+		// marshall the prices.
+		body, err := json.Marshal(allPrices)
+		if err != nil {
+			return respondWithStdErr(err, "error while marshalling prices.")
+		}
+
+		return events.APIGatewayProxyResponse{
+			StatusCode: 200,
+			Body:       string(body),
+		}, nil
+
+	}
+
+	return respondWithStdErr(nil, "invalid path.")
 }
 
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	switch request.HTTPMethod {
-	case http.MethodOptions:
-		return handleCors(request)
-	case http.MethodGet:
-		res, err := handleGet(request)
-		res.Headers =
-			map[string]string{
-				"Access-Control-Allow-Headers": "*",
-				"Access-Control-Allow-Origin":  "*",
-				"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
-			}
+	var res events.APIGatewayProxyResponse
+	var err error
 
-		return res, err
+	switch request.HTTPMethod {
 	default:
 		return events.APIGatewayProxyResponse{
 			StatusCode: 400,
 		}, nil
+
+	case http.MethodOptions:
+		return handleCors(request)
+
+	case http.MethodGet:
+		res, err = handleGet(request)
+	case http.MethodPost:
+		res, err = handlePost(request)
 	}
+
+	res.Headers =
+		map[string]string{
+			"Access-Control-Allow-Headers": "*",
+			"Access-Control-Allow-Origin":  "*",
+			"Access-Control-Allow-Methods": "OPTIONS,GET,POST",
+		}
+	return res, err
 }
 
 func main() {
