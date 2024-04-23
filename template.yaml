@@ -72,6 +72,7 @@ Resources:
             TableName: current_fuel_prices
         - DynamoDBCrudPolicy:
             TableName: safpis_fuel_sites
+      Timeout: 10
 
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function

@@ -33,46 +33,19 @@ var (
 	apikey          string = os.Getenv("api_key")
 )
 
-type SA_FuelPriceList struct {
-	Prices []SA_FuelPrice `json:"SitePrices"`
-}
-
-type SA_FuelPrice struct {
-	SiteId             int     `json:"SiteId"`
-	FuelId             int     `json:"FuelId"`
-	CollectionMethod   string  `json:"CollectionMethod"`
-	TransactionDateUTC string  `json:"TransactionDateUTC"`
-	Price              float64 `json:"Price"`
-}
-
-type FuelPriceList struct {
-	Prices map[int]FuelStation `json:"SitePrices"`
-}
-
-type FuelStation struct {
-	SiteID    int               `json:"SiteId"`
-	FuelTypes map[int]FuelPrice `json:"FuelTypes"`
-}
-
-type FuelPrice struct {
-	FuelID             int     `json:"FuelId"`
-	CollectionMethod   string  `json:"CollectionMethod"`
-	TransactionDateUTC string  `json:"TransactionDateUTC"`
-	Price              float64 `json:"Price"`
-}
-
 type PetrolStationList struct {
 	Sites []PetrolStationSite `json:"S"`
 }
 
 type PetrolStationSite struct {
-	SiteID    int     `json:"S"`
-	Address   string  `json:"A"`
-	Name      string  `json:"N"`
-	BrandID   int     `json:"B"`
-	Postcode  string  `json:"P"`
-	Latitude  float64 `json:"Lat"`
-	Longitude float64 `json:"Lng"`
+	SiteID        int     `json:"S"`
+	Address       string  `json:"A"`
+	Name          string  `json:"N"`
+	BrandID       int     `json:"B"`
+	Postcode      string  `json:"P"`
+	GooglePlaceID string  `json:"GPI"`
+	Latitude      float64 `json:"Lat"`
+	Longitude     float64 `json:"Lng"`
 }
 
 func getClient() *dynamodb.DynamoDB {
@@ -100,19 +73,11 @@ func createPriceTable(client *dynamodb.DynamoDB) error {
 				AttributeName: aws.String("SiteId"),
 				AttributeType: aws.String("N"),
 			},
-			{
-				AttributeName: aws.String("FuelId"),
-				AttributeType: aws.String("N"),
-			},
 		},
 		KeySchema: []*dynamodb.KeySchemaElement{
 			{
 				AttributeName: aws.String("SiteId"),
 				KeyType:       aws.String("HASH"),
-			},
-			{
-				AttributeName: aws.String("FuelId"),
-				KeyType:       aws.String("RANGE"),
 			},
 		},
 
@@ -236,47 +201,24 @@ func getAllPrices(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, 
 	}
 
 	// convert the SA_FuelPriceList to the local FuelPriceList
-	// var prices FuelPriceList
-	// for _, price := range saPrices.Prices {
-	// 	// get the required ids.
-	// 	siteId := price.SiteID
-	// 	fuelId := price.FuelID
-
-	// 	// ensure the fuel station exists.
-	// 	if _, ok := prices.Prices[siteId]; !ok {
-	// 		prices.Prices[siteId] = FuelStation{}
-	// 	}
-
-	// 	// convert the price into the fuel price required for the db.
-	// 	prices.Prices[siteId].FuelTypes[fuelId] = FuelPrice{
-	// 		FuelID:             price.FuelID,
-	// 		CollectionMethod:   price.CollectionMethod,
-	// 		TransactionDateUTC: price.TransactionDateUTC,
-	// 		Price:              price.Price,
-	// 	}
-	// }
+	prices, err := saPrices.ToPriceList()
+	if err != nil {
+		return respondWithStdErr(err)
+	}
 
 	// update the database.
-	var item map[string]*dynamodb.AttributeValue
-
-	allPrices := saPrices.Prices
-	fmt.Printf("updating %d records in database.\n", len(allPrices))
-	for n := 0; n < len(allPrices); {
+	allSites, err := prices.Marshal()
+	if err != nil {
+		return respondWithStdErr(err)
+	}
+	fmt.Printf("updating %d records in database.\n", len(allSites))
+	for n := 0; n < len(allSites); {
 		var writeReqs []*dynamodb.WriteRequest
 
-		end := min(n+batchSize, len(allPrices))
-		for _, price := range allPrices[n:end] {
-			// - marshall the struct
-			item = map[string]*dynamodb.AttributeValue{
-				"SiteId": {N: aws.String(fmt.Sprintf("%d", price.SiteId))},
-				"FuelId": {N: aws.String(fmt.Sprintf("%d", price.FuelId))},
-				"M":      {S: aws.String(price.CollectionMethod)},
-				"D":      {S: aws.String(price.TransactionDateUTC)},
-				"P":      {N: aws.String(decimal.NewFromFloat(price.Price).String())},
-			}
-
-			// - append the write req
-			writeReqs = append(writeReqs, &dynamodb.WriteRequest{PutRequest: &dynamodb.PutRequest{Item: item}})
+		// - append the write req
+		end := min(n+batchSize, len(allSites))
+		for _, site := range allSites[n:end] {
+			writeReqs = append(writeReqs, &dynamodb.WriteRequest{PutRequest: &dynamodb.PutRequest{Item: site}})
 		}
 
 		// - send the batch
@@ -287,7 +229,7 @@ func getAllPrices(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, 
 		}
 
 		n += batchSize
-		fmt.Printf("updated ~%d/%d records in database.\n", end, len(allPrices))
+		fmt.Printf("updated ~%d/%d records in database.\n", end, len(allSites))
 	}
 	fmt.Printf("done!.\n")
 
@@ -330,6 +272,7 @@ func getAllSites(dbClient *dynamodb.DynamoDB) (events.APIGatewayProxyResponse, e
 				"N":      {S: aws.String(petrolStation.Name)},
 				"B":      {N: aws.String(fmt.Sprintf("%d", petrolStation.BrandID))},
 				"P":      {S: aws.String(petrolStation.Postcode)},
+				"G":      {S: aws.String(petrolStation.GooglePlaceID)},
 				"Lt":     {N: aws.String(decimal.NewFromFloat(petrolStation.Latitude).String())},
 				"Lg":     {N: aws.String(decimal.NewFromFloat(petrolStation.Longitude).String())},
 			}

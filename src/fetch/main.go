@@ -30,23 +30,12 @@ var (
 	apikey  string = os.Getenv("api_key")
 )
 
-type FuelPrices struct {
-	Prices []FuelPrice `json:"SitePrices"`
-}
-
-type FuelPrice struct {
-	SiteID             int     `json:"SiteId"`
-	FuelID             int     `json:"FuelId"`
-	CollectionMethod   string  `json:"CollectionMethod"`
-	TransactionDateUTC string  `json:"TransactionDateUTC"`
-	Price              float64 `json:"Price"`
-}
-
 type PetrolStationSite struct {
-	SiteId int     `json:"SiteId"`
-	Name   string  `json:"Name"`
-	Lat    float64 `json:"Lat"`
-	Lng    float64 `json:"Lng"`
+	SiteId        int     `json:"SiteId"`
+	Name          string  `json:"Name"`
+	Lat           float64 `json:"Lat"`
+	Lng           float64 `json:"Lng"`
+	GooglePlaceID string  `json:"GPI"`
 }
 
 func getClient() *dynamodb.DynamoDB {
@@ -117,11 +106,14 @@ func getAllSites() (events.APIGatewayProxyResponse, error) {
 			return respondWithStdErr(err, "error while converting long into float.")
 		}
 
+		googlePlaceID := *rawsite["G"].S
+
 		site := PetrolStationSite{
-			SiteId: SiteId,
-			Name:   name,
-			Lat:    float64(lat),
-			Lng:    float64(lng),
+			SiteId:        SiteId,
+			Name:          name,
+			Lat:           float64(lat),
+			Lng:           float64(lng),
+			GooglePlaceID: googlePlaceID,
 		}
 
 		allSites = append(allSites, site)
@@ -192,16 +184,20 @@ func handlePost(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 	case "/prices":
 		// get params
 		fmt.Println("getting fuel type from params.")
-		fuelId := request.QueryStringParameters["fuelType"]
+		fuelId, err := strconv.Atoi(request.QueryStringParameters["fuelType"])
+		if err != nil {
+			return respondWithStdErr(err, "Error converting fuelId into integer.")
+		}
 
 		fmt.Println("getting sites from body.")
-		var fuelSites []int
-		err := json.Unmarshal([]byte(request.Body), &fuelSites)
+		var siteIds []int
+		err = json.Unmarshal([]byte(request.Body), &siteIds)
 		if err != nil {
 			return respondWithStdErr(err, "")
 		}
 
-		fmt.Printf("getting prices for fuel type %s\n", fuelId)
+		fmt.Printf("getting prices for sites %d\n", siteIds)
+		fmt.Printf("getting prices for fuel type %d\n", fuelId)
 
 		// get prices from DB.
 		dbclient := getClient()
@@ -213,16 +209,15 @@ func handlePost(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 		var item map[string]*dynamodb.AttributeValue
 
 		allPrices := map[int]float64{}
-		fmt.Printf("fetching %d prices from database.\n", len(fuelSites))
-		for n := 0; n < len(fuelSites); {
+		fmt.Printf("fetching %d prices from database.\n", len(siteIds))
+		for n := 0; n < len(siteIds); {
 			attrs := []map[string]*dynamodb.AttributeValue{}
 
-			end := min(n+readBatchSize, len(fuelSites))
-			for _, siteId := range fuelSites[n:end] {
+			end := min(n+readBatchSize, len(siteIds))
+			for _, siteId := range siteIds[n:end] {
 				// - marshall the struct
 				item = map[string]*dynamodb.AttributeValue{
 					"SiteId": {N: aws.String(fmt.Sprintf("%d", siteId))},
-					"FuelId": {N: aws.String(fuelId)},
 				}
 
 				// - append the write req
@@ -243,19 +238,19 @@ func handlePost(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 				return respondWithStdErr(err, "")
 			}
 
-			for _, item := range batchRes.Responses[pricesTableName] {
-				// id, err := strconv.Atoi(strings.Split(*item["SiteId"].S, ":")[0])
-				id, err := strconv.Atoi(*item["SiteId"].N)
-				if err != nil {
-					return respondWithStdErr(err, "error while converting siteid to int.")
-				}
+			var allSites FuelPriceList
+			err = allSites.Unmarshal(batchRes.Responses[pricesTableName])
+			if err != nil {
+				fmt.Println("Error while unmarshalling fuel prices.")
+				return respondWithStdErr(err, "Error while unmarshalling fuel prices.")
+			}
+			fmt.Println(allSites)
 
-				prices, err := strconv.ParseFloat(*item["P"].N, 64)
-				if err != nil {
-					return respondWithStdErr(err, "error while converting price to float.")
+			// filter the sites.
+			for siteId, site := range allSites.Sites {
+				if price, ok := site.FuelTypes[fuelId]; ok {
+					allPrices[siteId] = float64(price.Price)
 				}
-
-				allPrices[id] = prices
 			}
 
 			n += readBatchSize
